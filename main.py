@@ -62,26 +62,60 @@ def process_video_high_quality(input_path, output_path):
     clip.close()
 
 def upload_to_cloud(filepath):
-    """Make.com کی 5MB لمٹ سے بچنے کے لیے ویڈیو کو کلاؤڈ پر بھیج کر ڈائریکٹ لنک حاصل کرنا"""
-    print("☁️ Uploading HD Video to Cloud (Catbox) to bypass Webhook limits...")
+    """
+    3 مختلف کلاؤڈ سروسز (Catbox, 0x0.st, tmpfiles) کے بیک اپ کے ساتھ مضبوط اپلوڈ فنکشن
+    """
+    # سرور کو یہ دکھانے کے لیے کہ ریکوئسٹ اصلی براؤزر سے آ رہی ہے
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+    
+    # 1. کوشش: Catbox.moe
+    print("☁️ [Attempt 1] Uploading HD Video to Catbox.moe...")
+    for _ in range(2):
+        try:
+            with open(filepath, 'rb') as f:
+                res = requests.post(
+                    'https://catbox.moe/user/api.php',
+                    data={'reqtype': 'fileupload'},
+                    files={'fileToUpload': f},
+                    headers=headers,
+                    timeout=300
+                )
+            if res.status_code == 200 and "catbox.moe" in res.text:
+                link = res.text.strip()
+                print(f"✅ Catbox Upload Success! Link: {link}")
+                return link
+        except Exception as e:
+            time.sleep(2)
+
+    # 2. بیک اپ کوشش: 0x0.st (انتہائی فاسٹ اور ریلائبل)
+    print("⚡ Catbox failed! Trying Backup Cloud 1 (0x0.st)...")
     try:
         with open(filepath, 'rb') as f:
-            response = requests.post(
-                'https://catbox.moe/user/api.php',
-                data={'reqtype': 'fileupload'},
-                files={'fileToUpload': f},
-                timeout=300
-            )
-        if response.status_code == 200:
-            video_link = response.text.strip()
-            print(f"✅ Cloud Upload Success! Link: {video_link}")
-            return video_link
-        else:
-            print("⚠️ Cloud upload failed.")
-            return None
+            res = requests.post('https://0x0.st', files={'file': f}, headers=headers, timeout=300)
+        if res.status_code == 200 and "0x0.st" in res.text:
+            link = res.text.strip()
+            print(f"✅ 0x0.st Upload Success! Link: {link}")
+            return link
     except Exception as e:
-        print(f"⚠️ Upload exception: {e}")
-        return None
+        print(f"⚠️ 0x0.st warning: {e}")
+
+    # 3. بیک اپ کوشش: tmpfiles.org
+    print("⚡ Trying Backup Cloud 2 (tmpfiles.org)...")
+    try:
+        with open(filepath, 'rb') as f:
+            res = requests.post('https://tmpfiles.org/api/v1/upload', files={'file': f}, headers=headers, timeout=300)
+        if res.status_code == 200:
+            data = res.json()
+            url = data['data']['url']
+            # ڈائریکٹ ڈاؤن لوڈ لنک بنانے کے لیے org/ کے بعد dl/ لگانا
+            direct_link = url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
+            print(f"✅ tmpfiles Upload Success! Link: {direct_link}")
+            return direct_link
+    except Exception as e:
+        print(f"⚠️ tmpfiles warning: {e}")
+
+    print("❌ All cloud upload attempts failed!")
+    return None
 
 def generate_seo(topic_name):
     default_title = f"{topic_name}: Amazing Facts! | Explain With Ali #shorts"
@@ -156,7 +190,7 @@ def main():
     
     seo_data = generate_seo(clean_topic)
     
-    # 1. کلاؤڈ پر اپلوڈ کریں اور لنک لیں
+    # 1. کلاؤڈ پر اپلوڈ کریں (3 سرورز کے بیک اپ کے ساتھ)
     video_url = upload_to_cloud(output_path)
     if not video_url:
         print("❌ Could not get video URL. Stopping.")
