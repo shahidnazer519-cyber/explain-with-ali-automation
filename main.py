@@ -16,7 +16,7 @@ from moviepy.editor import VideoFileClip
 from google import genai
 from google.genai import types
 
-# کانفیگریشن اور سیٹنگز (دونوں نام سپورٹ ہوں گے)
+# کانفیگریشن اور سیٹنگز
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 MAKE_WEBHOOK_URL = os.getenv("MAKE_WEBHOOK_URL") or os.getenv("BUFFER_WEBHOOK_URL")
 VIDEOS_DIR = "videos"
@@ -24,34 +24,40 @@ HISTORY_FILE = "history.txt"
 
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-def get_history():
+def ensure_history_file():
+    """اگر history.txt موجود نہ ہو تو فوراً بنا دے تاکہ Git 128 ایرر نہ آئے"""
     if not os.path.exists(HISTORY_FILE):
-        return set()
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            f.write("")
+
+def get_history():
+    ensure_history_file()
     with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-        return set(line.strip() for line in f)
+        return set(line.strip() for line in f if line.strip())
 
 def add_to_history(filename):
+    ensure_history_file()
     with open(HISTORY_FILE, "a", encoding="utf-8") as f:
         f.write(filename + "\n")
 
 def process_video_hd(input_path, output_path):
-    """ویڈیو کو 720p پر ری سائز اور کمپریس کرنا تاکہ سائز 5MB کے اندر رہے اور Cloudflare 502 نہ دے"""
-    print("⏳ Compressing video to under 5MB for direct webhook upload...")
+    """ویڈیو کو 500k بٹ ریٹ پر کمپریس کرنا تاکہ سائز 4 ایم بی سے کم رہے اور Make.com 413 ایرر نہ دے"""
+    print("⏳ Compressing video to ~3.5MB (Under 5MB limit) for direct webhook...")
     clip = VideoFileClip(input_path)
     
-    # FFmpeg خود ہی پرفیکٹ ری سائز اور کراپ کر لے گا (سپیڈ تیز ہوگی)
     clip.write_videofile(
         output_path, 
         codec="libx264", 
         audio_codec="aac",
-        bitrate="800k",
+        bitrate="500k",        # 800k سے کم کر کے 500k کیا (سائز 3.5MB بنے گا)
+        audio_bitrate="96k",   # آڈیو کو بھی ہلکا کیا
         preset="fast",   
         ffmpeg_params=["-vf", "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280"]
     )
     clip.close()
 
 def generate_seo(topic_name):
-    """جیمنائی سے الگ الگ Title اور Description لینا تاکہ Make.com میں آسانی سے Map ہو سکے"""
+    """جیمنائی کے نئے ترین ماڈلز کے ساتھ کلین ایس ای او لینا"""
     default_title = f"{topic_name}: Amazing Story! | Explain With Ali #shorts"
     default_desc = f"🎬 Amazing facts and summary about {topic_name}.\n\n👉 Subscribe for more 1-minute explainers!\n\n#Shorts #Facts #Viral #ExplainWithAli"
     
@@ -69,8 +75,14 @@ def generate_seo(topic_name):
     Return ONLY valid JSON without markdown formatting or extra text.
     """
     
-    # ماڈل بیک اپ لسٹ (اگر ایک فیل ہو تو دوسرا چلے)
-    models_to_try = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']
+    # گوگل کے نئے اور تصدیق شدہ ماڈل نام
+    models_to_try = [
+        'gemini-2.5-flash-latest', 
+        'gemini-2.5-flash-001',
+        'gemini-1.5-flash-latest', 
+        'gemini-pro', 
+        'gemini-1.5-pro-latest'
+    ]
     
     for model in models_to_try:
         try:
@@ -82,14 +94,18 @@ def generate_seo(topic_name):
             )
             data = json.loads(res.text.strip())
             if "title" in data and "description" in data:
+                print(f"✅ AI Success with {model}!")
                 return data
         except Exception as e:
-            print(f"⚠️ {model} failed ({e}), trying next...")
+            print(f"⚠️ {model} failed, trying next...")
             time.sleep(1)
             
+    print("⚡ Switching to Backup SEO Engine...")
     return {"title": default_title, "description": default_desc}
 
 def main():
+    ensure_history_file() # شروع میں ہی فائل بنا دے گا
+    
     if not os.path.exists(VIDEOS_DIR):
         os.makedirs(VIDEOS_DIR)
         return
@@ -114,7 +130,7 @@ def main():
     input_path = os.path.join(VIDEOS_DIR, target_video)
     output_path = os.path.join(VIDEOS_DIR, "processed_" + target_video)
     
-    # 🛑 نام سے یوٹیوب کی فالتو آئی ڈی (مثلًا __3CGI04KITMI) کو صاف کرنا
+    # نام سے یوٹیوب کی فالتو آئی ڈی کو صاف کرنا
     base_name = os.path.splitext(target_video)[0]
     clean_topic = base_name.split("__")[0].strip() if "__" in base_name else base_name.strip()
         
@@ -130,17 +146,15 @@ def main():
     seo_data = generate_seo(clean_topic)
     print(f"📌 Title: {seo_data['title']}")
     
-    print("🚀 Sending ACTUAL COMPRESSED VIDEO to Make.com Webhook...")
+    print("🚀 Sending ACTUAL COMPRESSED VIDEO (~3.5MB) to Make.com Webhook...")
     upload_success = False
     
-    # 3-Retry Protection (اگر نیٹ ورک کا مسئلہ آئے)
     for attempt in range(1, 4):
         try:
             print(f"📤 [Attempt {attempt}/3] Uploading...")
             with open(output_path, 'rb') as f:
                 files_dict = {"video_file": (target_video, f, "video/mp4")}
                 
-                # Make.com کو اب الگ الگ فیلڈز ملیں گی
                 data_dict = {
                     "video_name": clean_topic,
                     "title": seo_data["title"],
@@ -148,7 +162,7 @@ def main():
                     "topic": clean_topic
                 }
                 
-                res = requests.post(MAKE_WEBHOOK_URL, data=data_dict, files=files_dict, timeout=90)
+                res = requests.post(MAKE_WEBHOOK_URL, data=data_dict, files=files_dict, timeout=120)
                 
             if res.status_code in [200, 201]:
                 print("✅ Successfully uploaded to Make.com!")
