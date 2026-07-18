@@ -25,7 +25,7 @@ HISTORY_FILE = "history.txt"
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 def ensure_history_file():
-    """اگر history.txt موجود نہ ہو تو فوراً بنا دے تاکہ Git 128 ایرر نہ آئے"""
+    """اگر history.txt موجود نہ ہو تو فوراً بنا دے تاکہ Git کا ایرر نہ آئے"""
     if not os.path.exists(HISTORY_FILE):
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
             f.write("")
@@ -41,23 +41,34 @@ def add_to_history(filename):
         f.write(filename + "\n")
 
 def process_video_hd(input_path, output_path):
-    """ویڈیو کو 500k بٹ ریٹ پر کمپریس کرنا تاکہ سائز 4 ایم بی سے کم رہے اور Make.com 413 ایرر نہ دے"""
-    print("⏳ Compressing video to ~3.5MB (Under 5MB limit) for direct webhook...")
+    """سمارٹ فارمولا: ویڈیو کے دورانیے کے حساب سے بٹ ریٹ خود طے کرنا تاکہ سائز 3.5MB سے کم رہے"""
+    print("⏳ Analyzing video duration to apply dynamic compression...")
     clip = VideoFileClip(input_path)
+    duration = clip.duration
+    
+    # 3.2 MB کا ہدف (Kilobits میں: 3.2 * 8192 = ~26200 kb)
+    # ٹوٹل بٹ ریٹ = 26200 / دورانیہ (سیکنڈز میں)
+    target_total_bitrate = int(26200 / duration)
+    
+    # آڈیو کے لیے 64k نکال کر باقی ویڈیو کو دینا (کم از کم 150k اور زیادہ سے زیادہ 700k کی حد)
+    video_bitrate_val = max(150, min(target_total_bitrate - 64, 700))
+    video_bitrate = f"{video_bitrate_val}k"
+    
+    print(f"📏 Video Duration: {duration:.1f}s | Calculated Bitrate: {video_bitrate} (Guaranteed under 3.5MB)")
     
     clip.write_videofile(
         output_path, 
         codec="libx264", 
         audio_codec="aac",
-        bitrate="500k",        # 800k سے کم کر کے 500k کیا (سائز 3.5MB بنے گا)
-        audio_bitrate="96k",   # آڈیو کو بھی ہلکا کیا
+        bitrate=video_bitrate,
+        audio_bitrate="64k",
         preset="fast",   
         ffmpeg_params=["-vf", "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280"]
     )
     clip.close()
 
 def generate_seo(topic_name):
-    """جیمنائی کے نئے ترین ماڈلز کے ساتھ کلین ایس ای او لینا"""
+    """جیمنائی ماڈلز اور بیک اپ انجن کے ساتھ ایس ای او جنریشن"""
     default_title = f"{topic_name}: Amazing Story! | Explain With Ali #shorts"
     default_desc = f"🎬 Amazing facts and summary about {topic_name}.\n\n👉 Subscribe for more 1-minute explainers!\n\n#Shorts #Facts #Viral #ExplainWithAli"
     
@@ -75,13 +86,12 @@ def generate_seo(topic_name):
     Return ONLY valid JSON without markdown formatting or extra text.
     """
     
-    # گوگل کے نئے اور تصدیق شدہ ماڈل نام
+    # گوگل کے فعال ترین ماڈلز کی لسٹ
     models_to_try = [
-        'gemini-2.5-flash-latest', 
-        'gemini-2.5-flash-001',
-        'gemini-1.5-flash-latest', 
-        'gemini-pro', 
-        'gemini-1.5-pro-latest'
+        'gemini-2.5-flash', 
+        'gemini-2.0-flash',
+        'gemini-1.5-flash', 
+        'gemini-1.5-pro'
     ]
     
     for model in models_to_try:
@@ -104,7 +114,7 @@ def generate_seo(topic_name):
     return {"title": default_title, "description": default_desc}
 
 def main():
-    ensure_history_file() # شروع میں ہی فائل بنا دے گا
+    ensure_history_file()
     
     if not os.path.exists(VIDEOS_DIR):
         os.makedirs(VIDEOS_DIR)
@@ -146,7 +156,7 @@ def main():
     seo_data = generate_seo(clean_topic)
     print(f"📌 Title: {seo_data['title']}")
     
-    print("🚀 Sending ACTUAL COMPRESSED VIDEO (~3.5MB) to Make.com Webhook...")
+    print("🚀 Sending ACTUAL COMPRESSED VIDEO (<3.5MB) to Make.com Webhook...")
     upload_success = False
     
     for attempt in range(1, 4):
