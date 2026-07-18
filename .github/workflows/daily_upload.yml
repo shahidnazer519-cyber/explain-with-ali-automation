@@ -10,7 +10,7 @@ jobs:
   process_and_upload:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # ہسٹری فائل اپڈیٹ کرنے کے لیے رائٹ پرمیشن ضروری ہے
+      contents: write  # ہسٹری فائل اپڈیٹ اور پش کرنے کے لیے ضروری ہے
 
     steps:
       - name: Checkout Repository
@@ -35,7 +35,7 @@ jobs:
       - name: Run Automation & AI Script
         env:
           MAKE_WEBHOOK_URL: ${{ secrets.MAKE_WEBHOOK_URL }}
-          BUFFER_WEBHOOK_URL: ${{ secrets.MAKE_WEBHOOK_URL }} # آپ کے سکرپٹ کے دونوں نام سپورٹ کرے گا
+          BUFFER_WEBHOOK_URL: ${{ secrets.MAKE_WEBHOOK_URL }} # دونوں نام سپورٹ کرے گا
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python main.py
 
@@ -45,4 +45,5 @@ jobs:
           git config --global user.email "bot@explainwithali.com"
           git add history.txt videos/
           git commit -m "📦 Processed reel and updated history [skip ci]" || echo "No changes to commit"
-          git push
+          git pull origin main --rebase # 🛡️ یہ لائن سرور کو سنک کرے گی تاکہ rejected ایرر نہ آئے
+          git push # اب پش 100% کامیاب ہوگا
