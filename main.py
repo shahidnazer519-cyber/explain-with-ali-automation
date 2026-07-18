@@ -24,7 +24,9 @@ HISTORY_FILE = "history.json"
 os.makedirs(VIDEO_DIR, exist_ok=True)
 os.makedirs(ARCHIVE_DIR, exist_ok=True)
 
+# ==========================================
 # 1. Load Upload History
+# ==========================================
 history_data = []
 if os.path.exists(HISTORY_FILE):
     try:
@@ -36,14 +38,18 @@ if os.path.exists(HISTORY_FILE):
 
 uploaded_files = [item["original_filename"] for item in history_data if "original_filename" in item]
 
-# 2. Scan for MP4 video files
-videos = [f for f in os.listdir(VIDEO_DIR) if f.endswith(".mp4") and not f.startswith("processed_")]
+# ==========================================
+# 2. Scan for MP4 video files (Case-Insensitive .mp4 / .MP4)
+# ==========================================
+videos = [f for f in os.listdir(VIDEO_DIR) if f.lower().endswith(".mp4") and not f.startswith("processed_")]
 
 if not videos:
     print("⚠️ Koi raw video file nahi mili 'videos/' folder mein! Process stopping.")
     exit(0)
 
+# ==========================================
 # 3. Find the first video NOT in history
+# ==========================================
 video_file = None
 for v in sorted(videos):
     if v not in uploaded_files:
@@ -71,7 +77,6 @@ def generate_fallback_metadata(filename):
     print("⚡ Activating Advanced Python Backup SEO Engine...")
     clean_name = os.path.splitext(filename)[0].replace("_", " ").replace("-", " ").title()
     
-    # Dynamic Power Words for Shorts
     hooks = ["Ending Explained!", "Mind-Blowing Story!", "Don't Miss This!", "Dark Korean Thriller!"]
     selected_hook = random.choice(hooks)
     
@@ -116,7 +121,6 @@ if GEMINI_API_KEY:
     Return ONLY JSON. No markdown backticks.
     """
     
-    # Priority List of Gemini Models to try automatically
     available_models = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']
     ai_success = False
     
@@ -126,7 +130,6 @@ if GEMINI_API_KEY:
             
         print(f"🔄 Attempting with AI Model: {model_name}...")
         
-        # Try each model up to 3 times
         for attempt in range(1, 4):
             try:
                 print(f"   [Attempt {attempt}/3] Sending request...")
@@ -139,9 +142,7 @@ if GEMINI_API_KEY:
                     )
                 )
                 
-                # Parse output safely
                 raw_text = response.text.strip()
-                # Remove markdown code blocks if AI wrapped them despite instructions
                 if raw_text.startswith("```json"):
                     raw_text = raw_text[7:]
                 if raw_text.endswith("```"):
@@ -159,15 +160,15 @@ if GEMINI_API_KEY:
                     
             except Exception as e:
                 print(f"   ⚠️ Error on {model_name} (Attempt {attempt}): {e}")
-                time.sleep(2)  # Wait 2 seconds before retrying
+                time.sleep(2)
                 
     if not ai_success:
-        print("❌ All Gemini AI models & retries failed or quota exceeded!")
+        print("❌ All Gemini AI models & retries failed! Switching to fallback engine.")
         ai_data = generate_fallback_metadata(video_file)
         title, description, tags = ai_data["title"], ai_data["description"], ai_data["tags"]
 
 else:
-    print("⚠️ GEMINI_API_KEY not found in secrets!")
+    print("⚠️ GEMINI_API_KEY not found in secrets! Switching to fallback engine.")
     ai_data = generate_fallback_metadata(video_file)
     title, description, tags = ai_data["title"], ai_data["description"], ai_data["tags"]
 
@@ -200,28 +201,33 @@ except subprocess.CalledProcessError as e:
     exit(1)
 
 # ==========================================
-# 🚀 Webhook & History Update
+# 🚀 Webhook (Direct Video File Upload) & History Update
 # ==========================================
-raw_url = f"https://raw.githubusercontent.com/{REPO_NAME}/{BRANCH}/{VIDEO_DIR}/{processed_video_file}"
-
-payload = {
-    "video_url": raw_url,
-    "filename": processed_video_file,
-    "title": title,
-    "description": description,
-    "tags": tags,
-    "tags_string": ", ".join(tags) if isinstance(tags, list) else str(tags)
-}
-
 if not WEBHOOK_URL:
     print("❌ MAKE_WEBHOOK_URL environment variable missing! Cannot send to Make.com")
     exit(1)
 
-print("🚀 Sending data to Make.com Webhook...")
-res = requests.post(WEBHOOK_URL, json=payload)
+print(f"🚀 Sending ACTUAL VIDEO FILE '{processed_video_file}' directly to Make.com Webhook...")
+
+# Data parameters jo video ke sath text form me jayenge
+form_data = {
+    "filename": processed_video_file,
+    "title": title,
+    "description": description,
+    "tags_string": ", ".join(tags) if isinstance(tags, list) else str(tags)
+}
+
+# Actual video file ko binary mode ('rb') me open karke Webhook par stream karna
+with open(processed_video_path, "rb") as video_stream:
+    files = {
+        'file': (processed_video_file, video_stream, 'video/mp4')
+    }
+    
+    # Send both Data + Video File directly to Webhook
+    res = requests.post(WEBHOOK_URL, data=form_data, files=files)
 
 if res.status_code == 200:
-    print("✅ Webhook successfully triggered!")
+    print("✅ Webhook successfully triggered with Direct Video File!")
     
     # Update History Record
     new_record = {
