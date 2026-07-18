@@ -25,21 +25,23 @@ os.makedirs(VIDEO_DIR, exist_ok=True)
 os.makedirs(ARCHIVE_DIR, exist_ok=True)
 
 # ==========================================
-# 1. Load Upload History
+# 1. Load Upload History (With Crash Protection)
 # ==========================================
 history_data = []
 if os.path.exists(HISTORY_FILE):
     try:
         with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-            history_data = json.load(f)
+            content = f.read().strip()
+            if content:
+                history_data = json.loads(content)
     except Exception as e:
-        print(f"⚠️ History file read error: {e}. Starting fresh.")
+        print(f"⚠️ History file read error ({e}). Resetting to clean []...")
         history_data = []
 
-uploaded_files = [item["original_filename"] for item in history_data if "original_filename" in item]
+uploaded_files = [item["original_filename"] for item in history_data if isinstance(item, dict) and "original_filename" in item]
 
 # ==========================================
-# 2. Scan for MP4 video files (Case-Insensitive .mp4 / .MP4)
+# 2. Scan for MP4 video files (Case-Insensitive)
 # ==========================================
 videos = [f for f in os.listdir(VIDEO_DIR) if f.lower().endswith(".mp4") and not f.startswith("processed_")]
 
@@ -70,10 +72,6 @@ print(f"🎬 Processing new video: '{video_file}'...")
 # 🛡️ ADVANCED PYTHON BACKUP SEO ENGINE
 # ==========================================
 def generate_fallback_metadata(filename):
-    """
-    Agar Gemini API ki limit khatam ho jaye ya saare models fail ho jayein,
-    toh ye function automatically high-converting SEO metadata create karta hai.
-    """
     print("⚡ Activating Advanced Python Backup SEO Engine...")
     clean_name = os.path.splitext(filename)[0].replace("_", " ").replace("-", " ").title()
     
@@ -99,7 +97,7 @@ def generate_fallback_metadata(filename):
     return {"title": title, "description": description, "tags": tags}
 
 # ==========================================
-# 🧠 GEMINI AI - AUTO SELECT & RETRY SYSTEM
+# 🧠 GEMINI AI - GEMINI 3.1 PRIORITY SYSTEM
 # ==========================================
 title, description, tags = None, None, None
 
@@ -121,7 +119,8 @@ if GEMINI_API_KEY:
     Return ONLY JSON. No markdown backticks.
     """
     
-    available_models = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']
+    # 🔥 Updated Priority: Gemini 3.1 -> Gemini 3.0 -> Latest active fallbacks
+    available_models = ['gemini-3.1-flash', 'gemini-3.1-pro', 'gemini-3.0-flash', 'gemini-2.5-flash-latest']
     ai_success = False
     
     for model_name in available_models:
@@ -132,7 +131,7 @@ if GEMINI_API_KEY:
         
         for attempt in range(1, 4):
             try:
-                print(f"   [Attempt {attempt}/3] Sending request...")
+                print(f"   [Attempt {attempt}/3] Sending request to {model_name}...")
                 response = client.models.generate_content(
                     model=model_name,
                     contents=prompt,
@@ -163,7 +162,7 @@ if GEMINI_API_KEY:
                 time.sleep(2)
                 
     if not ai_success:
-        print("❌ All Gemini AI models & retries failed! Switching to fallback engine.")
+        print("❌ All Gemini AI models failed or unavailable! Switching to fallback engine.")
         ai_data = generate_fallback_metadata(video_file)
         title, description, tags = ai_data["title"], ai_data["description"], ai_data["tags"]
 
@@ -201,15 +200,12 @@ except subprocess.CalledProcessError as e:
     exit(1)
 
 # ==========================================
-# 🚀 Webhook (Direct Video File Upload) & History Update
+# 🚀 Webhook Upload With 3-RETRY PROTECTION
 # ==========================================
 if not WEBHOOK_URL:
     print("❌ MAKE_WEBHOOK_URL environment variable missing! Cannot send to Make.com")
     exit(1)
 
-print(f"🚀 Sending ACTUAL VIDEO FILE '{processed_video_file}' directly to Make.com Webhook...")
-
-# Data parameters jo video ke sath text form me jayenge
 form_data = {
     "filename": processed_video_file,
     "title": title,
@@ -217,18 +213,34 @@ form_data = {
     "tags_string": ", ".join(tags) if isinstance(tags, list) else str(tags)
 }
 
-# Actual video file ko binary mode ('rb') me open karke Webhook par stream karna
-with open(processed_video_path, "rb") as video_stream:
-    files = {
-        'file': (processed_video_file, video_stream, 'video/mp4')
-    }
-    
-    # Send both Data + Video File directly to Webhook
-    res = requests.post(WEBHOOK_URL, data=form_data, files=files)
+webhook_success = False
 
-if res.status_code == 200:
-    print("✅ Webhook successfully triggered with Direct Video File!")
-    
+for attempt in range(1, 4):
+    print(f"🚀 [Attempt {attempt}/3] Sending ACTUAL VIDEO FILE directly to Make.com Webhook...")
+    try:
+        # File stream ko har retry par fresh open karna zaroori hai
+        with open(processed_video_path, "rb") as video_stream:
+            files = {
+                'file': (processed_video_file, video_stream, 'video/mp4')
+            }
+            # 120 seconds (2 mins) ka timeout taake Make.com aram se bari file process kar sake
+            res = requests.post(WEBHOOK_URL, data=form_data, files=files, timeout=120)
+        
+        if res.status_code == 200:
+            print("✅ Webhook successfully triggered with Direct Video File!")
+            webhook_success = True
+            break
+        else:
+            print(f"⚠️ Webhook server error! Status Code: {res.status_code}\nResponse snippet: {res.text[:150]}...")
+            print("⏳ Waiting 5 seconds before retrying...")
+            time.sleep(5)
+            
+    except Exception as e:
+        print(f"⚠️ Network/Timeout exception during webhook upload: {e}")
+        print("⏳ Waiting 5 seconds before retrying...")
+        time.sleep(5)
+
+if webhook_success:
     # Update History Record
     new_record = {
         "original_filename": video_file,
@@ -247,5 +259,5 @@ if res.status_code == 200:
     shutil.move(processed_video_path, os.path.join(ARCHIVE_DIR, processed_video_file))
     print(f"📦 Moved both video files to '{ARCHIVE_DIR}/' folder.")
 else:
-    print(f"❌ Webhook Failed! Status Code: {res.status_code}\nResponse: {res.text}")
+    print("❌ All 3 Webhook upload attempts failed! Please check Make.com scenario status or Cloudflare limits.")
     exit(1)
